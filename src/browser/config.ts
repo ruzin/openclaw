@@ -28,6 +28,7 @@ export type ResolvedBrowserConfig = {
   headless: boolean;
   noSandbox: boolean;
   attachOnly: boolean;
+  extraArgs: string[];
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
 };
@@ -192,6 +193,9 @@ export function resolveBrowserConfig(
   const headless = cfg?.headless === true;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
+  const extraArgs = Array.isArray(cfg?.extraArgs)
+    ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
+    : [];
   const executablePath = cfg?.executablePath?.trim() || undefined;
 
   const defaultProfileFromConfig = cfg?.defaultProfile?.trim() || undefined;
@@ -222,6 +226,7 @@ export function resolveBrowserConfig(
     headless,
     noSandbox,
     attachOnly,
+    extraArgs,
     defaultProfile,
     profiles,
   };

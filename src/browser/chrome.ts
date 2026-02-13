@@ -8,7 +8,7 @@ import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
 import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
-import { appendCdpPath } from "./cdp.helpers.js";
+import { appendCdpPath, withCdpSocket } from "./cdp.helpers.js";
 import {
   type BrowserExecutable,
   resolveBrowserExecutableForPlatform,
@@ -215,6 +215,14 @@ export async function launchOpenClawChrome(
       args.push("--disable-dev-shm-usage");
     }
 
+    // Anti-detection: reduce bot fingerprinting signals.
+    args.push("--disable-blink-features=AutomationControlled");
+
+    // Append user-supplied extra args from config (browser.extraArgs).
+    if (resolved.extraArgs.length > 0) {
+      args.push(...resolved.extraArgs);
+    }
+
     // Always open a blank tab to ensure a target exists.
     args.push("about:blank");
 
@@ -303,6 +311,13 @@ export async function launchOpenClawChrome(
     `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
   );
 
+  // Inject anti-detection stealth script on every new document.
+  try {
+    await injectStealthScript(profile.cdpUrl);
+  } catch (err) {
+    log.warn(`stealth script injection failed: ${String(err)}`);
+  }
+
   return {
     pid,
     exe,
@@ -311,6 +326,47 @@ export async function launchOpenClawChrome(
     startedAt,
     proc,
   };
+}
+
+/**
+ * Inject stealth patches via CDP so headless Chrome looks like a regular browser.
+ * Uses Page.addScriptToEvaluateOnNewDocument so the script runs before any page JS.
+ */
+async function injectStealthScript(cdpUrl: string) {
+  const wsUrl = await getChromeWebSocketUrl(cdpUrl, 2000);
+  if (!wsUrl) return;
+
+  const stealthJs = `
+    // Hide navigator.webdriver
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+    // Spoof chrome.runtime to look like a real browser (not fully empty)
+    if (!window.chrome) { window.chrome = {}; }
+    if (!window.chrome.runtime) {
+      window.chrome.runtime = { connect: function() {}, sendMessage: function() {} };
+    }
+
+    // Patch permissions query for notifications
+    const origQuery = window.Permissions?.prototype?.query;
+    if (origQuery) {
+      window.Permissions.prototype.query = function(params) {
+        if (params?.name === 'notifications') {
+          return Promise.resolve({ state: Notification.permission });
+        }
+        return origQuery.call(this, params);
+      };
+    }
+
+    // Remove "cdc_" properties injected by ChromeDriver (not present with CDP, but belt-and-suspenders)
+    for (const key of Object.keys(document)) {
+      if (/^cdc_/.test(key)) { delete document[key]; }
+    }
+  `;
+
+  await withCdpSocket(wsUrl, async (send) => {
+    await send("Page.enable");
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: stealthJs });
+  });
 }
 
 export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 2500) {
