@@ -1,6 +1,6 @@
 ---
 name: tesco
-description: "Meal prep and Tesco grocery shopping via browser automation. Plan weekly meals, extract ingredients from recipes or URLs, consolidate shopping lists (deduplicate pantry staples), and add items to a Tesco.com basket. Supports multiple users with separate Tesco accounts. Triggers: meal prep, plan meals, tesco shop, add to tesco, grocery list, weekly meals, tesco login."
+description: "Meal prep and Tesco grocery shopping via browser automation. Plan weekly meals, extract ingredients from recipes or URLs, consolidate shopping lists (deduplicate pantry staples), and add items to a Tesco.com basket. Supports multiple users with separate Tesco accounts. Triggers: meal prep, plan meals, tesco shop, add to tesco, grocery list, weekly meals, tesco login, connect my tesco."
 metadata: {"openclaw": {"emoji": "🛒", "requires": {"bins": ["python3"]}}}
 ---
 
@@ -68,11 +68,45 @@ Route to the correct profile based on the Telegram sender's name or username. De
 
 ## Login Flow
 
-Tesco's login page uses Akamai Bot Manager which blocks automated logins from cloud server IPs. Use **Cookie Login** (primary) to bypass this.
+**IMPORTANT:** When the user says "connect my tesco", "log into tesco", or any login-related request, you MUST use the VNC Login method below. Do NOT use the `browser()` tool for login — Akamai Bot Manager blocks automated logins from cloud server IPs. The `browser()` tool is only for shopping AFTER login.
 
-### Method 1: Cookie Login (PRIMARY - always try this first)
+### Method 1: VNC Login (PRIMARY - always use this for login)
 
-The user logs in on their own device and shares session cookies. This is fast and reliable.
+Opens a real Chrome browser on the server inside a virtual display and shares it with the user via noVNC. The user logs in like a normal human — Akamai sees genuine interaction. Use the `exec()` tool (not `browser()`) to run the VNC login script.
+
+1. Determine the profile name from the sender (e.g. `tesco-ruzin`, `tesco-gf`).
+
+2. Start the VNC session:
+   ```
+   exec(command="python3 ~/.openclaw/workspace/skills/tesco/scripts/tesco-vnc-login.py start tesco-{username}", timeout=30)
+   ```
+
+3. Parse the JSON response and extract the `url` field.
+
+4. Send the user a message with the clickable URL:
+   > To connect your Tesco account, open this link and log in:
+   >
+   > [Login here]({url})
+   >
+   > You'll see a Chrome browser with Tesco open — just sign in normally. I'll detect when you're done.
+
+5. Poll every 15 seconds until login is detected or 30 minutes elapse:
+   ```
+   exec(command="python3 ~/.openclaw/workspace/skills/tesco/scripts/tesco-vnc-login.py status tesco-{username}", timeout=10)
+   ```
+
+6. When `logged_in: true`:
+   ```
+   exec(command="python3 ~/.openclaw/workspace/skills/tesco/scripts/tesco-vnc-login.py stop tesco-{username}", timeout=10)
+   ```
+   Confirm to the user:
+   > You're connected! I can now shop on Tesco for you.
+
+7. If 30 minutes pass without login: stop the VNC session and tell the user it timed out. Offer to try again.
+
+### Method 2: Cookie Login (FALLBACK - only if VNC login fails or user prefers)
+
+The user logs in on their own device and shares session cookies. More technical but works without VNC.
 
 1. Ask the user to log in on their phone or computer:
    > To connect your Tesco account, I need your session cookies:
@@ -90,17 +124,6 @@ The user logs in on their own device and shares session cookies. This is fast an
 3. Follow Browser Setup steps and verify login by snapshotting the homepage. Look for the user's name or "My account" instead of "Sign in".
 
 4. If verification fails, ask the user to re-copy cookies (they may have expired or been incomplete).
-
-### Method 2: Browser Login (FALLBACK - only if user can't provide cookies)
-
-This may be blocked by Akamai on server IPs. Warm up the session first.
-
-1. Follow Browser Setup, browse homepage and a category page first
-2. Navigate to login: `browser(action="navigate", targetUrl="https://secure.tesco.com/account/en-GB/login", profile="tesco-ruzin")`
-3. If "security checks" or "Access Denied" appears: **stop and switch to Cookie Login**
-4. Ask for email, fill, click Next. If blocked: **switch to Cookie Login**
-5. Ask for password, fill, click sign in. Handle 2FA if prompted.
-6. Verify login and confirm to user.
 
 Session cookies persist in the profile. Re-login only if session expires (detected by redirect to login page during shopping).
 
@@ -174,7 +197,7 @@ Build this JSON for ALL recipes, then write it to a temp file.
 Run the consolidation script to merge duplicates and separate pantry staples:
 
 ```bash
-exec(command="echo '<JSON_ARRAY>' | python3 {baseDir}/scripts/tesco-shop.py consolidate", timeout=15)
+exec(command="echo '<JSON_ARRAY>' | python3 ~/.openclaw/workspace/skills/tesco/scripts/tesco-shop.py consolidate", timeout=15)
 ```
 
 The script will:
@@ -341,6 +364,7 @@ When the user asks to see their basket:
 
 | User says | Action |
 |-----------|--------|
+| "connect my tesco" | Run Login Flow (VNC) |
 | "log into tesco" | Run Login Flow |
 | "plan meals for the week" | Meal Prep Flow from Step 1 |
 | "meal plan" / "meal prep" | Meal Prep Flow from Step 1 |
